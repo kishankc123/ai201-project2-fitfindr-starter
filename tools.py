@@ -69,8 +69,43 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
-    return []
+    # Load all listings
+    listings = load_listings()
+
+    # Normalize description keywords to lowercase for matching
+    description_lower = description.lower()
+    keywords = description_lower.split()
+
+    # Filter and score listings
+    filtered_and_scored = []
+
+    for listing in listings:
+        # Filter by max_price if provided
+        if max_price is not None and listing["price"] > max_price:
+            continue
+
+        # Filter by size if provided (case-insensitive substring match)
+        if size is not None:
+            size_lower = size.lower()
+            listing_size_lower = listing["size"].lower()
+            # Check if the target size is contained in the listing size
+            # e.g., "M" matches "S/M", "M/L", or "M"
+            if size_lower not in listing_size_lower:
+                continue
+
+        # Score by keyword relevance (count matching keywords in title and description)
+        listing_text = (listing["title"] + " " + listing["description"]).lower()
+        score = sum(1 for keyword in keywords if keyword in listing_text)
+
+        # Only keep listings with at least one keyword match
+        if score > 0:
+            filtered_and_scored.append((listing, score))
+
+    # Sort by score (highest first) and extract just the listing dicts
+    filtered_and_scored.sort(key=lambda x: x[1], reverse=True)
+    results = [listing for listing, _ in filtered_and_scored]
+
+    return results
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
@@ -100,8 +135,86 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     Before writing code, fill in the Tool 2 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    client = _get_groq_client()
+
+    # Build item description for the LLM
+    new_item_description = f"""
+Title: {new_item.get('title', 'Unknown item')}
+Brand: {new_item.get('brand', 'Unknown')}
+Category: {new_item.get('category', 'Unknown')}
+Colors: {', '.join(new_item.get('colors', []))}
+Style tags: {', '.join(new_item.get('style_tags', []))}
+Description: {new_item.get('description', 'No description')}
+Condition: {new_item.get('condition', 'Unknown')}
+"""
+
+    # Check if wardrobe is empty
+    if not wardrobe.get('items') or len(wardrobe['items']) == 0:
+        # Empty wardrobe: ask for general styling advice
+        prompt = f"""
+You are a personal stylist. A customer just found this secondhand item and wants styling advice.
+They don't have their existing wardrobe listed yet, so provide general styling suggestions.
+
+New item:
+{new_item_description}
+
+Please suggest:
+1. What types of pieces pair well with this item
+2. What vibe or aesthetic this item suits
+3. Specific styling tips (tucking, rolling sleeves, layering, etc.)
+4. Accessory pairing ideas
+
+Keep the response practical, friendly, and inspirational. Make it feel like authentic personal styling advice.
+"""
+    else:
+        # Non-empty wardrobe: create specific outfit combinations
+        wardrobe_items_text = "\n".join([
+            f"- {item.get('name', 'Item')}: {item.get('category', 'unknown')} | "
+            f"Colors: {', '.join(item.get('colors', []))} | "
+            f"Style: {', '.join(item.get('style_tags', []))}"
+            for item in wardrobe['items']
+        ])
+
+        prompt = f"""
+You are a personal stylist. A customer found this secondhand item and wants outfit suggestions
+using pieces from their existing wardrobe.
+
+New item:
+{new_item_description}
+
+Their wardrobe includes:
+{wardrobe_items_text}
+
+Please suggest 1–2 complete outfit combinations:
+1. Pair the new item with specific pieces from their wardrobe
+2. Mention the exact wardrobe piece names
+3. Describe the overall vibe/aesthetic of each outfit
+4. Include specific styling tips (tucking, rolling, layering, etc.)
+5. Suggest accessories or styling details
+
+Keep the response practical, friendly, and feeling like authentic personal styling advice.
+Make sure to reference actual pieces from their wardrobe by name.
+"""
+
+    # Call the Groq LLM
+    message = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        max_tokens=1024,
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    )
+
+    response = message.choices[0].message.content if message.choices else ""
+
+    # Return fallback if LLM returns empty string
+    if not response or response.strip() == "":
+        return f"{new_item.get('title', 'This item')} is a great find! Style it however feels authentic to you — there's no wrong way to wear it."
+
+    return response
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -133,5 +246,62 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    # Guard against empty or None outfit string
+    if not outfit or outfit.strip() == "":
+        fallback = f"Added {new_item.get('title', 'this item')} from {new_item.get('platform', 'thrift')} to my wardrobe for ${new_item.get('price', 'free')}. Great condition — ready to style!"
+        return fallback
+
+    # Build item description for the LLM
+    item_title = new_item.get('title', 'this item')
+    item_price = new_item.get('price', 'free')
+    item_platform = new_item.get('platform', 'thrift')
+    item_brand = new_item.get('brand', 'Unknown')
+    item_condition = new_item.get('condition', 'Good')
+    item_colors = ', '.join(new_item.get('colors', []))
+
+    prompt = f"""
+You are a fashion-savvy social media influencer writing a casual thrift haul post caption.
+
+New item found:
+- Title: {item_title}
+- Brand: {item_brand}
+- Price: ${item_price}
+- Platform: {item_platform}
+- Condition: {item_condition}
+- Colors: {item_colors}
+
+Styling suggestion:
+{outfit}
+
+Please generate a SHORT, CASUAL, AUTHENTIC Instagram/TikTok caption (1–2 sentences) for this thrift haul that:
+1. Mentions the item name, price, and platform naturally (once each)
+2. Captures the outfit vibe from the styling suggestion
+3. Feels like a real OOTD post, not a product description
+4. Includes optional emojis for personality
+5. Sounds excited and authentic, like sharing a great find with friends
+
+Keep it under 150 characters if possible. Make it feel personal and casual.
+"""
+
+    client = _get_groq_client()
+
+    # Call the Groq LLM with higher temperature for variation
+    message = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        max_tokens=256,
+        temperature=0.9,
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    )
+
+    response = message.choices[0].message.content if message.choices else ""
+
+    # Return fallback if LLM returns empty string
+    if not response or response.strip() == "":
+        return f"Added {new_item.get('title', 'this item')} from {new_item.get('platform', 'thrift')} to my wardrobe for ${new_item.get('price', 'free')}. Great condition — ready to style!"
+
+    return response
