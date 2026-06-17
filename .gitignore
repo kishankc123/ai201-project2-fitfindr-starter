@@ -14,3 +14,15 @@ env/
 
 # macOS
 .DS_Store
+
+# Video files (demo recording)
+video/
+*.mp4
+*.mov
+*.mkv
+*.md
+
+#instruction files
+
+ins/
+*.md
